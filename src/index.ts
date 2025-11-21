@@ -3,10 +3,24 @@ import path from 'path';
 import type ts from 'typescript/lib/tsserverlibrary';
 import YAML from 'yaml';
 
+const hasConstAttribute = (ts_: typeof ts, node: ts.Node): boolean => {
+  const importDecl = ts_.isImportDeclaration(node.parent) ? node.parent : node.parent?.parent;
+  if (!importDecl || !ts_.isImportDeclaration(importDecl)) return false;
+  const attributes = importDecl.attributes?.elements;
+  if (!attributes) return false;
+  return attributes.some(
+    attr =>
+      attr.name.text === 'const' &&
+      ts_.isStringLiteral(attr.value) &&
+      attr.value.text === 'true'
+  );
+};
+
 export = ({ typescript: ts_ }: { typescript: typeof ts }) => ({
   create: (info: ts.server.PluginCreateInfo) => {
     const logger = info.project.projectService.logger;
     const { languageServiceHost, languageService } = info;
+    const constImports = new Set<string>();
 
     const getScriptKind = languageServiceHost.getScriptKind?.bind(languageServiceHost);
     languageServiceHost.getScriptKind = fileName => {
@@ -27,7 +41,8 @@ export = ({ typescript: ts_ }: { typescript: typeof ts }) => ({
       } catch (error) {
         logger.info(`[typescript-plugin-yaml] YAML.parse error:\n${error}`);
       }
-      const text = `export default ${JSON.stringify(object)};`;
+      const asConst = constImports.has(fileName) ? ' as const' : '';
+      const text = `export default ${JSON.stringify(object)}${asConst};`;
       return ts_.ScriptSnapshot.fromString(text);
     };
     const resolveModuleNameLiterals =
@@ -39,14 +54,19 @@ export = ({ typescript: ts_ }: { typescript: typeof ts }) => ({
     ) =>
       resolveModuleNameLiterals(moduleLiterals, containingFile, ...rest).map(
         (resolvedModule, index) => {
-          const moduleName = moduleLiterals[index].text;
+          const moduleLiteral = moduleLiterals[index];
+          const moduleName = moduleLiteral.text;
           if (!/\.ya?ml$/.test(moduleName)) return resolvedModule;
+          const resolvedFileName = resolvedModule.failedLookupLocations[1].slice(0, -3);
+          if (hasConstAttribute(ts_, moduleLiteral)) {
+            constImports.add(resolvedFileName);
+          }
           return {
             ...resolvedModule,
             resolvedModule: {
               extension: ts_.Extension.Ts,
               isExternalLibraryImport: false,
-              resolvedFileName: resolvedModule.failedLookupLocations[1].slice(0, -3)
+              resolvedFileName
             }
           };
         }
