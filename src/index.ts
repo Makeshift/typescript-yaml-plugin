@@ -33,7 +33,7 @@ const hasStringAttribute = (ts_: typeof ts, node: ts.Node, attributeName: string
   return !!value
 }
 
-const parseAsOpenAPIDocument = (content: object, version: string) => {
+const parseAsOpenAPIDocument = (content: object, version?: string) => {
   // getScriptSnapshot expects a synchronous function, so we have to wrap the async OpenApiParser calls
   try {
     return dereferenceSync(content as OpenAPI.Document)
@@ -47,6 +47,7 @@ export = ({ typescript: ts_ }: { typescript: typeof ts }) => ({
     const { logger } = info.project.projectService
     const { languageServiceHost, languageService } = info
     const constImports = new Set<string>()
+    let isOpenAPI: boolean
     let openAPIVersion: string | undefined
 
     const getScriptKind = languageServiceHost.getScriptKind?.bind(languageServiceHost)
@@ -75,17 +76,15 @@ export = ({ typescript: ts_ }: { typescript: typeof ts }) => ({
         asConst = 'as const'
       }
       
-      if (openAPIVersion) {
+      if (isOpenAPI) {
         const parsedDoc = parseAsOpenAPIDocument(object, openAPIVersion)
-        text = `import type { OpenAPI } from 'openapi-types'
+        let typeName = `OpenAPI`
+        if (openAPIVersion) {
+          typeName = `OpenAPIV${openAPIVersion.replace('.', '_')}`
+        }
+        text = `import type { ${typeName} } from 'openapi-types'
 const parsed = ${JSON.stringify(parsedDoc)} ${asConst}
-export default parsed`
-        // This overrode the asConst :/
-        // if (openAPIVersion) {
-        //   text += ' satisfies OpenAPI.OpenAPIV' + openAPIVersion.replace('.', '_')
-        // } else {
-        //   text += ' satisfies OpenAPI.Document'
-        // }
+export default parsed satisfies ${typeName}.Document`
       } else {
         text = `export default ${JSON.stringify(object)} ${asConst}`
       }
@@ -109,7 +108,8 @@ export default parsed`
             constImports.add(resolvedFileName)
           }
           if (hasStringAttribute(ts_, moduleLiteral, 'openAPI', 'true') || hasStringAttribute(ts_, moduleLiteral, 'openAPIVersion')) {
-            openAPIVersion = getStringAttribute(ts_, moduleLiteral, 'openAPIVersion') ?? '3.1.0'
+            isOpenAPI = true
+            openAPIVersion = getStringAttribute(ts_, moduleLiteral, 'openAPIVersion')
           }
           return {
             ...resolvedModule,
